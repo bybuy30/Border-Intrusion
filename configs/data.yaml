@@ -1,0 +1,31 @@
+# ── YOLO Dataset Configuration ────────────────────────────────────────────────
+# This file is read by Ultralytics during training, validation, and evaluation.
+# Paths are relative to the project root (forest-intrusion/).
+#
+# Update 'path' to an absolute path when running from Google Colab, e.g.:
+#   path: /content/drive/MyDrive/forest-intrusion/datasets/forest
+# or let the training script resolve it dynamically.
+
+# Root directory of the forest dataset
+path: datasets/forest
+
+# Sub-directories that contain images
+train: images/train
+val:   images/val
+test:  images/test
+
+# ── Class definitions ─────────────────────────────────────────────────────────
+# Three initial classes. Class IDs must match YOLO label files exactly.
+#
+#   0 → animal   – any wildlife detected in the scene
+#   1 → person   – any person detected (not presumed to be a threat)
+#   2 → firearm  – any visible weapon; triggers a special-priority alert
+#
+# Future classes (species, vehicles, etc.) can be appended here once
+# species-specific data is available.
+
+nc: 3
+names:
+  0: animal
+  1: person
+  2: firearm

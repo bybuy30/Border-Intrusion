@@ -1,0 +1,46 @@
+# ── Forest Intrusion Detection System — Python Dependencies ──────────────────
+# Tested with Python 3.10 / 3.11
+# Install with: pip install -r requirements.txt
+#
+# NOTE: ultralytics pulls in torch automatically. On a machine without an
+# NVIDIA GPU, the CPU-only wheels will be installed. Training on CPU is
+# extremely slow; use Google Colab for training.
+
+# ── Core computer vision ──────────────────────────────────────────────────────
+ultralytics==8.3.1          # YOLOv8 — includes torch, torchvision, opencv-python
+opencv-python==4.10.0.84    # Image / video I/O and drawing utilities
+
+# ── Data handling ──────────────────────────────────────────────────────────────
+numpy==1.26.4
+Pillow==10.4.0
+pandas==2.2.2
+PyYAML==6.0.2
+
+# ── Annotation utilities ──────────────────────────────────────────────────────
+supervision==0.24.0         # Drawing helpers and tracking utilities
+
+# ── Web UI ────────────────────────────────────────────────────────────────────
+streamlit==1.39.0
+
+# ── FastAPI backend (React dashboard API) ─────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.31.0
+python-multipart==0.0.12    # File upload support
+aiofiles==24.1.0            # Async file serving
+
+# ── Storage and logging ───────────────────────────────────────────────────────
+# sqlite3 is part of the Python standard library — no extra package needed
+python-dotenv==1.0.1        # Load .env configuration files
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.3
+pytest-mock==3.14.0
+
+# ── Notebook utilities (already available in Colab) ──────────────────────────
+ipywidgets==8.1.5
+matplotlib==3.9.2
+seaborn==0.13.2
+
+# ── Dataset download helpers ──────────────────────────────────────────────────
+requests==2.32.3
+tqdm==4.66.5

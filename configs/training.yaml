@@ -1,0 +1,51 @@
+# ── YOLOv8 Training Hyper-parameters ─────────────────────────────────────────
+# These values are passed to model.train() in scripts/train.py and in the
+# Colab notebook.  All numeric values are conservative defaults suitable for a
+# first experiment on Google Colab with a T4 or V100 GPU.
+#
+# Adjust batch_size down (e.g. 4) if you hit CUDA out-of-memory errors.
+# Adjust epochs and patience when you have more data.
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model: yolov8n.pt          # Pretrained nano backbone (downloaded automatically)
+data: configs/data.yaml    # Dataset descriptor (relative to project root)
+
+# ── Core training settings ────────────────────────────────────────────────────
+epochs: 20                 # Initial experiment; increase once the pipeline works
+imgsz: 640                 # Input resolution
+batch: 8                   # Reduce to 4 on GPUs with < 8 GB VRAM
+device: null               # null → auto-select (GPU if available, else CPU)
+workers: 4                 # DataLoader workers; set to 0 on Windows if errors occur
+
+# ── Regularisation and augmentation ──────────────────────────────────────────
+lr0: 0.01                  # Initial learning rate
+lrf: 0.01                  # Final learning rate (lr0 * lrf)
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# Mosaic and mix-up augmentation (enabled by default in YOLOv8)
+mosaic: 1.0
+mixup: 0.0                 # Disabled for small datasets
+
+# ── Early stopping ────────────────────────────────────────────────────────────
+patience: 5                # Stop if mAP50-95 does not improve for this many epochs
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+seed: 42
+deterministic: true
+
+# ── Output ────────────────────────────────────────────────────────────────────
+project: runs/train        # Parent directory for run folders
+name: forest_v1            # Run sub-directory name
+exist_ok: false            # Set true to resume overwriting the same folder
+save: true                 # Save checkpoints
+save_period: 5             # Save a checkpoint every N epochs (in addition to best/last)
+plots: true                # Generate training curves and confusion matrix
+val: true                  # Run validation after each epoch
+
+# ── Inference thresholds (used during evaluation) ────────────────────────────
+conf: 0.25                 # Confidence threshold
+iou: 0.45                  # NMS IoU threshold
