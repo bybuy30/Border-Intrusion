@@ -43,11 +43,10 @@ forest-intrusion/
 │   ├── detector.py           YOLOv8 detection wrapper
 │   ├── tracker.py            ByteTrack / BoT-SORT wrapper
 │   ├── alert_engine.py       Priority rules (firearm alerts, spatial association)
-│   ├── event_logger.py       SQLite event storage
+│   ├── event_logger.py       MongoDB event, image, and pole persistence
 │   └── evidence_store.py     JPEG evidence image writer
 ├── storage/
-│   ├── events/               SQLite database files
-│   └── evidence/             Evidence crop images
+│   └── evidence/             Event-specific six-image JPEG bursts
 ├── models/                   Place trained best.pt here
 ├── runs/                     Training and evaluation output directories
 ├── test_videos/              Short clips for local testing
@@ -88,7 +87,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 # 4. Copy the example environment file
-Copy-Item .env.example .env
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 # Edit .env if you want to change camera IDs or thresholds
 
 # 5. Verify the installation
@@ -235,14 +234,25 @@ python scripts/export_model.py --gdrive /content/drive/MyDrive/models
 
 ## Running image / video inference
 
-### Streamlit app
+### React dashboard
 
 ```powershell
-streamlit run app.py
+# Terminal 1 — backend (configure MongoDB in the project-root .env first)
+.\.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://localhost:8501> in your browser. Upload an image or video, then click
-through the Detect tab to see annotated results and logged events.
+```powershell
+# Terminal 2 — React frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. The frontend reads the API URL from
+`frontend/.env.local` (`VITE_API_BASE_URL`, default `http://localhost:8000`);
+MongoDB credentials belong only in the project-root `.env`. The backend uses
+`runs/detect/forest_finetune_5/weights/best.pt` by default. The legacy Streamlit
+prototype in `app.py` is optional and is not used by the React dashboard.
 
 ### Python API
 
@@ -265,14 +275,15 @@ for frame_dets in detector.detect_video("test_videos/clip.mp4"):
 
 ## Viewing events and evidence
 
-Events are stored in `storage/events/events.db` (SQLite).
+Events, image metadata, and pole status are stored in MongoDB. JPEG evidence remains in `storage/evidence/<event_id>/`.
 
 ```python
 from src.event_logger import EventLogger
 from src.config import Settings
 
 cfg = Settings()
-with EventLogger(cfg.database_path, cfg.evidence_dir) as el:
+with EventLogger(evidence_dir=cfg.evidence_dir, uri=cfg.mongodb_uri,
+                 database_name=cfg.mongodb_database) as el:
     # Recent events
     for event in el.get_recent_events(limit=20):
         print(event)
@@ -311,4 +322,4 @@ Evidence images are saved to `storage/evidence/` as JPEG files.
 - **Tracking IDs are temporary** session identifiers and do not identify real individuals across sessions.
 - **Accuracy depends entirely on training data.** Performance on new camera placements or lighting conditions may be poor without additional fine-tuning.
 - **Do not use this system** as the sole basis for restricting access, detaining individuals, or initiating law enforcement action.
-- Keep datasets, model weights, and event logs secure. Do not expose the SQLite database or evidence images publicly.
+- Keep datasets, model weights, MongoDB credentials, and evidence images secure. Do not expose evidence images publicly.

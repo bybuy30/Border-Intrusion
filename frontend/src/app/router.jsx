@@ -1,29 +1,36 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import { createBrowserRouter } from 'react-router-dom'
 import AppLayout from '../components/layout/AppLayout'
-import CommandCenter from '../pages/CommandCenter'
-import LiveSurveillance from '../pages/LiveSurveillance'
-import IncidentLog from '../pages/IncidentLog'
-import PerimeterMapPage from '../pages/PerimeterMapPage'
-import Analytics from '../pages/Analytics'
-import DeviceManagement from '../pages/DeviceManagement'
-import ModelPerformance from '../pages/ModelPerformance'
-import NotFound from '../pages/NotFound'
+
+const CommandCenter = lazy(() => import('../pages/CommandCenter'))
+const LiveSurveillance = lazy(() => import('../pages/LiveSurveillance'))
+const IncidentLog = lazy(() => import('../pages/IncidentLog'))
+const Analytics = lazy(() => import('../pages/Analytics'))
+const DeviceManagement = lazy(() => import('../pages/DeviceManagement'))
+const ModelPerformance = lazy(() => import('../pages/ModelPerformance'))
+const NotFound = lazy(() => import('../pages/NotFound'))
+
+function page(Page) {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-xs text-slate-500">Loading dashboard page…</div>}>
+      <Page />
+    </Suspense>
+  )
+}
 
 export const router = createBrowserRouter([
   {
     path: '/',
     element: <AppLayout />,
     children: [
-      { index: true,              element: <CommandCenter /> },
-      { path: 'surveillance',     element: <LiveSurveillance /> },
-      { path: 'incidents',        element: <IncidentLog /> },
-      { path: 'incidents/:id',    element: <IncidentLog /> },
-      { path: 'perimeter',        element: <PerimeterMapPage /> },
-      { path: 'analytics',        element: <Analytics /> },
-      { path: 'devices',          element: <DeviceManagement /> },
-      { path: 'model',            element: <ModelPerformance /> },
-      { path: '*',                element: <NotFound /> },
+      { index: true,              element: page(CommandCenter) },
+      { path: 'surveillance',     element: page(LiveSurveillance) },
+      { path: 'incidents',        element: page(IncidentLog) },
+      { path: 'incidents/:id',    element: page(IncidentLog) },
+      { path: 'analytics',        element: page(Analytics) },
+      { path: 'devices',          element: page(DeviceManagement) },
+      { path: 'model',            element: page(ModelPerformance) },
+      { path: '*',                element: page(NotFound) },
     ],
   },
 ])

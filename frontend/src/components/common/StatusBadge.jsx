@@ -14,7 +14,7 @@ export function PriorityBadge({ priority }) {
   if (!priority) return null
   return (
     <span className={`badge border ${priorityBadgeClass(priority)}`}>
-      {priority === 'high' ? '⚠ High' : 'Normal'}
+      {priority === 'critical' ? 'Critical' : priority === 'high' ? 'High' : 'Normal'}
     </span>
   )
 }

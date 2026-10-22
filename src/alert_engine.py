@@ -50,6 +50,7 @@ _PERSON_WITH_FIREARM_LABEL = (
     "Person and potential weapon observed in proximity — review required"
 )
 _NORMAL_LABEL = ""
+_PERSON_LABEL = "Person model detection — intrusion review required"
 
 
 @dataclass
@@ -79,6 +80,7 @@ class AlertEngine:
 
     PRIORITY_NORMAL = "normal"
     PRIORITY_HIGH = "high"
+    PRIORITY_CRITICAL = "critical"
 
     def __init__(
         self,
@@ -130,7 +132,9 @@ class AlertEngine:
         if class_name_lower == "person":
             return self._evaluate_person(bbox, concurrent_detections)
 
-        # Animal or unknown class — normal priority
+        if class_name_lower == "animal":
+            return AlertResult(self.PRIORITY_NORMAL, "Informational wildlife model detection", [])
+        # Unknown class — normal priority
         return AlertResult(
             priority=self.PRIORITY_NORMAL,
             label=_NORMAL_LABEL,
@@ -199,7 +203,7 @@ class AlertEngine:
         )
         logger.warning("High-priority alert: %s", label)
         return AlertResult(
-            priority=self.PRIORITY_HIGH,
+            priority=self.PRIORITY_CRITICAL,
             label=label,
             associated_ids=nearby_person_ids,
         )
@@ -209,12 +213,10 @@ class AlertEngine:
         bbox: tuple[float, float, float, float],
         others: List[Detection],
     ) -> AlertResult:
-        """Apply person-specific alert rules (none currently — normal priority)."""
-        # A person alone is not escalated.  Future rules (e.g. geofence
-        # violation, after-hours detection) can be added here.
+        """Flag a person model detection for intrusion review."""
         return AlertResult(
-            priority=self.PRIORITY_NORMAL,
-            label=_NORMAL_LABEL,
+            priority=self.PRIORITY_HIGH,
+            label=_PERSON_LABEL,
             associated_ids=[],
         )
 

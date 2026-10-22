@@ -22,6 +22,7 @@ export const CLASS_COLOURS = {
 
 export const PRIORITY_COLOURS = {
   high:   'bg-red-950 text-red-400 border-red-800',
+  critical: 'bg-red-950 text-red-300 border-red-700',
   normal: 'bg-surface-700 text-slate-400 border-forest-800',
 }
 

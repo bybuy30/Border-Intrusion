@@ -19,11 +19,6 @@ export const NAV_ITEMS = [
     icon: 'AlertTriangle',
   },
   {
-    label: 'Perimeter Map',
-    path: '/perimeter',
-    icon: 'Map',
-  },
-  {
     label: 'Analytics',
     path: '/analytics',
     icon: 'BarChart2',

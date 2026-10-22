@@ -41,7 +41,7 @@ class Settings:
     # ── Model ─────────────────────────────────────────────────────────────────
     model_weights: Path = field(
         default_factory=lambda: Path(
-            os.getenv("MODEL_WEIGHTS", "models/best.pt")
+            os.getenv("MODEL_WEIGHTS", "runs/detect/forest_finetune_5/weights/best.pt")
         )
     )
 
@@ -65,11 +65,13 @@ class Settings:
     )
 
     # ── Storage ───────────────────────────────────────────────────────────────
-    database_path: Path = field(
-        default_factory=lambda: Path(
-            os.getenv("DATABASE_PATH", "storage/events/events.db")
-        )
-    )
+    mongodb_uri: str = field(default_factory=lambda: os.getenv("MONGODB_URI", ""))
+    mongodb_database: str = field(default_factory=lambda: os.getenv("MONGODB_DATABASE", "forest_intrusion"))
+    camera_index: int = field(default_factory=lambda: int(os.getenv("CAMERA_INDEX", "0")))
+    event_cooldown_seconds: float = field(default_factory=lambda: float(os.getenv("EVENT_COOLDOWN_SECONDS", "10")))
+    burst_interval_seconds: float = field(default_factory=lambda: float(os.getenv("BURST_INTERVAL_SECONDS", "0.25")))
+    pole_name: str = field(default_factory=lambda: os.getenv("POLE_NAME", "Demo Pole"))
+    pole_location: str = field(default_factory=lambda: os.getenv("POLE_LOCATION", ""))
     evidence_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv("EVIDENCE_DIR", "storage/evidence")
@@ -88,14 +90,10 @@ class Settings:
         if not self.model_weights.is_absolute():
             self.model_weights = root / self.model_weights
 
-        if not self.database_path.is_absolute():
-            self.database_path = root / self.database_path
-
         if not self.evidence_dir.is_absolute():
             self.evidence_dir = root / self.evidence_dir
 
         # Ensure storage directories exist
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
     @property

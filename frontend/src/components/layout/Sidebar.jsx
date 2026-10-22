@@ -1,7 +1,7 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, Video, AlertTriangle, Map,
+  LayoutDashboard, Video, AlertTriangle,
   BarChart2, Cpu, Activity, ChevronLeft, ChevronRight,
   TreePine,
 } from 'lucide-react'
@@ -9,7 +9,7 @@ import { NAV_ITEMS } from '../../constants/navigation'
 import { useWsStatus } from '../../hooks/useWebSocket'
 
 const ICON_MAP = {
-  LayoutDashboard, Video, AlertTriangle, Map,
+  LayoutDashboard, Video, AlertTriangle,
   BarChart2, Cpu, Activity,
 }
 

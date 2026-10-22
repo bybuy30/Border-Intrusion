@@ -13,6 +13,13 @@ Routes
   GET  /api/dashboard/summary
   GET  /api/incidents
   GET  /api/incidents/{event_id}
+  GET  /api/incidents/{event_id}/images
+  GET  /api/poles
+  GET  /api/cameras/discover
+  GET  /api/monitor/status
+  GET  /api/monitor/stream
+  POST /api/monitor/start
+  POST /api/monitor/stop
   PATCH /api/incidents/{event_id}
   GET  /api/incidents/{event_id}/evidence
   GET  /api/devices
@@ -53,7 +60,7 @@ from fastapi import (
     WebSocketDisconnect, status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -87,13 +94,28 @@ app.add_middleware(
 
 # ── Shared resources (initialised once on startup) ────────────────────────────
 cfg            = Settings()
-event_logger   = EventLogger(cfg.database_path, cfg.evidence_dir)
+event_logger   = None
+database_error = None
+try:
+    event_logger = EventLogger(evidence_dir=cfg.evidence_dir, uri=cfg.mongodb_uri,
+                               database_name=cfg.mongodb_database)
+except Exception as exc:
+    database_error = str(exc)
 alert_engine   = AlertEngine(firearm_conf_threshold=cfg.firearm_alert_threshold)
+live_monitor = None
+_event_loop: asyncio.AbstractEventLoop | None = None
 
 # Serve evidence images as static files
 EVIDENCE_DIR = cfg.evidence_dir
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/evidence", StaticFiles(directory=str(EVIDENCE_DIR)), name="evidence")
+
+@app.middleware("http")
+async def require_mongodb(request, call_next):
+    db_free = {"/api/health", "/api/cameras/discover", "/api/monitor/status"}
+    if request.url.path.startswith("/api/") and request.url.path not in db_free and event_logger is None:
+        return JSONResponse(status_code=503, content={"detail": f"MongoDB unavailable: {database_error}"})
+    return await call_next(request)
 
 # ── WebSocket connection manager ──────────────────────────────────────────────
 
@@ -147,7 +169,9 @@ def health() -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "model_ready": model_ready,
         "model_path": str(cfg.model_weights),
-        "database": str(cfg.database_path),
+        "database": cfg.mongodb_database,
+        "database_connected": event_logger is not None,
+        "database_error": database_error,
         "version": "1.0.0",
     }
 
@@ -156,7 +180,7 @@ def health() -> dict:
 def dashboard_summary() -> dict:
     """Aggregate summary for the Command Centre page."""
     counts = event_logger.count_by_class()
-    total  = sum(counts.values())
+    total  = event_logger.count_events()
 
     # Events in the last 24 h
     all_recent = event_logger.get_recent_events(limit=500)
@@ -170,13 +194,13 @@ def dashboard_summary() -> dict:
             return 9999
 
     today = [e for e in all_recent if _age_h(e) <= 24]
-    high   = [e for e in all_recent if e["alert_priority"] == "high"]
+    high_count = event_logger.count_events({"alert_priority": {"$in": ["high", "critical"]}})
     pending = [e for e in all_recent if e["review_status"] == "pending"]
 
     return {
         "total_events_all_time": total,
         "total_events_today": len(today),
-        "high_priority_count": len(high),
+        "high_priority_count": high_count,
         "pending_review_count": len(pending),
         "class_breakdown": counts,
         "model_ready": cfg.model_weights.exists(),
@@ -192,6 +216,8 @@ def list_incidents(
     alert_priority: Optional[str] = Query(None),
     review_status: Optional[str] = Query(None),
     pole_id: Optional[str] = Query(None),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
     segment_id: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
 ) -> dict:
@@ -201,17 +227,17 @@ def list_incidents(
     All filters are AND-combined. ``search`` matches against pole_id,
     camera_id, class_name, and alert_label.
     """
-    # Fetch a generous window and filter in Python (SQLite is local so cost is low)
-    events = event_logger.get_recent_events(limit=5000)
+    events = event_logger.query_events(
+        class_name=class_name,
+        priority=alert_priority,
+        pole_id=pole_id,
+        start=_normalize_date_filter(start_date),
+        end=_normalize_date_filter(end_date),
+        limit=5000,
+    )
 
-    if class_name:
-        events = [e for e in events if e["class_name"] == class_name]
-    if alert_priority:
-        events = [e for e in events if e["alert_priority"] == alert_priority]
     if review_status:
         events = [e for e in events if e["review_status"] == review_status]
-    if pole_id:
-        events = [e for e in events if e.get("pole_id") == pole_id]
     if segment_id:
         events = [e for e in events if e.get("segment_id") == segment_id]
     if search:
@@ -241,6 +267,142 @@ def get_incident(event_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Event not found")
     event["evidence_url"] = _evidence_url(event.get("evidence_path"))
     return event
+
+
+@app.get("/api/incidents/{event_id}/images")
+def get_event_images(event_id: str) -> list[dict]:
+    if not event_logger.get_event(event_id):
+        raise HTTPException(status_code=404, detail="Event not found")
+    return [{"event_id": event_id, "sequence": image["sequence"],
+             "capture_timestamp": image["capture_timestamp"], "mime_type": image["mime_type"],
+             "size_bytes": image["size_bytes"],
+             "url": f"/api/incidents/{event_id}/images/{image['sequence']}"}
+            for image in event_logger.get_event_images(event_id)]
+
+
+@app.get("/api/incidents/{event_id}/images/{sequence}")
+def get_event_image(event_id: str, sequence: int):
+    image = next((x for x in event_logger.get_event_images(event_id) if x["sequence"] == sequence), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    path = Path(image["local_path"]).resolve()
+    try:
+        path.relative_to(EVIDENCE_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid image reference")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Evidence image is missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/api/poles")
+def get_poles() -> list[dict]:
+    poles = event_logger.get_poles()
+    latest_by_pole = {}
+    for event in event_logger.get_recent_events(limit=5000):
+        latest_by_pole.setdefault(event.get("pole_id"), event)
+
+    now = datetime.now(timezone.utc)
+    for pole in poles:
+        latest_event = latest_by_pole.get(pole.get("pole_id"))
+        pole["latest_event"] = latest_event
+        if latest_event:
+            pole["location"] = pole.get("location") or latest_event.get("pole_location")
+        if not pole.get("pole_name") and pole.get("pole_id") == cfg.pole_id:
+            pole["pole_name"] = cfg.pole_name
+        heartbeat = pole.get("last_heartbeat")
+        try:
+            heartbeat_at = datetime.fromisoformat(heartbeat)
+            if heartbeat_at.tzinfo is None:
+                heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+            is_online = (
+                pole.get("status") == "online"
+                and (now - heartbeat_at).total_seconds() <= 15
+            )
+        except (TypeError, ValueError):
+            is_online = False
+        pole["online"] = is_online
+        pole["status"] = "online" if is_online else "offline"
+    return poles
+
+
+@app.get("/api/cameras/discover")
+def camera_discovery(max_index: int = Query(8, ge=1, le=32)) -> list[dict]:
+    from src.live_monitor import discover_cameras
+    return discover_cameras(max_index=max_index, dshow=(os.name == "nt"))
+
+
+@app.get("/api/monitor/stream")
+def monitor_stream():
+    """Stream annotated camera frames as MJPEG for browser <img> elements."""
+    monitor = live_monitor
+    if monitor is None or not monitor.status().get("running"):
+        raise HTTPException(status_code=409, detail="Camera monitoring is not running")
+
+    import cv2
+
+    def frames():
+        while True:
+            frame = monitor.latest_frame()
+            if frame is not None:
+                ok, encoded = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82]
+                )
+                if ok:
+                    image = encoded.tobytes()
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n"
+                        + f"Content-Length: {len(image)}\r\n\r\n".encode("ascii")
+                        + image
+                        + b"\r\n"
+                    )
+            time.sleep(0.1)
+
+    return StreamingResponse(
+        frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+def _get_live_monitor():
+    global live_monitor
+    if live_monitor is None:
+        if event_logger is None:
+            raise HTTPException(status_code=503, detail=f"MongoDB unavailable: {database_error}")
+        if not cfg.model_weights.exists():
+            raise HTTPException(status_code=503, detail=f"Model weights not found: {cfg.model_weights}")
+        from src.detector import Detector
+        from src.live_monitor import LiveMonitor
+        detector = Detector(cfg.model_weights, conf=cfg.confidence_threshold, iou=cfg.iou_threshold)
+        cfg.class_names = {int(k): str(v) for k, v in detector.class_names.items()}
+        live_monitor = LiveMonitor(
+            cfg, detector, event_logger, alert_engine, on_event=_publish_monitor_event
+        )
+    return live_monitor
+
+
+@app.get("/api/monitor/status")
+def monitor_status() -> dict:
+    if event_logger is None:
+        return {"running": False, "connected": False, "error": database_error}
+    if live_monitor is None:
+        return {"running": False, "connected": False, "camera_id": cfg.camera_id,
+                "camera_index": cfg.camera_index, "message": "Stopped"}
+    return live_monitor.status()
+
+
+@app.post("/api/monitor/start")
+def start_monitor(
+    camera_index: int | None = None, camera_id: str | None = None
+) -> dict:
+    return _get_live_monitor().start(camera_index, camera_id)
+
+
+@app.post("/api/monitor/stop")
+def stop_monitor() -> dict:
+    return live_monitor.stop() if live_monitor else {"running": False, "connected": False, "message": "Stopped"}
 
 
 @app.patch("/api/incidents/{event_id}")
@@ -345,6 +507,7 @@ def analytics_detections(
 
     # Group by date string
     by_date: dict[str, dict] = {}
+    by_class: dict[str, int] = {}
     for ev in window:
         date_str = ev["server_ts"][:10]
         if date_str not in by_date:
@@ -352,7 +515,8 @@ def analytics_detections(
         cls = ev.get("class_name", "unknown")
         if cls in by_date[date_str]:
             by_date[date_str][cls] += 1
-        if ev.get("alert_priority") == "high":
+        by_class[cls] = by_class.get(cls, 0) + 1
+        if ev.get("alert_priority") in {"high", "critical"}:
             by_date[date_str]["high"] += 1
 
     # Counts by pole
@@ -371,7 +535,7 @@ def analytics_detections(
         "days": days,
         "total": len(window),
         "by_date": sorted(by_date.values(), key=lambda x: x["date"]),
-        "by_class": event_logger.count_by_class(),
+        "by_class": by_class,
         "by_pole": by_pole,
         "review_status_breakdown": review_counts,
     }
@@ -637,6 +801,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _publish_monitor_event(event: dict) -> None:
+    loop = _event_loop
+    if loop is None or loop.is_closed():
+        logger.warning("Could not publish live detection: API event loop is unavailable")
+        return
+    loop.call_soon_threadsafe(
+        lambda: asyncio.create_task(_broadcast_event(event))
+    )
+
+
+def _normalize_date_filter(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid date/time filter: {value}"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
 def _evidence_url(path: str | Path | None) -> str | None:
     """Convert an absolute evidence file path to a relative URL."""
     if not path:
@@ -653,12 +841,15 @@ def _evidence_url(path: str | Path | None) -> str | None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    global _event_loop
+    _event_loop = asyncio.get_running_loop()
     logger.info("Forest Intrusion API started")
     logger.info("Model weights: %s (exists=%s)", cfg.model_weights, cfg.model_weights.exists())
-    logger.info("Database: %s", cfg.database_path)
+    logger.info("MongoDB database: %s (connected=%s)", cfg.mongodb_database, event_logger is not None)
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    event_logger.close()
+    if event_logger:
+        event_logger.close()
     logger.info("Forest Intrusion API shut down")

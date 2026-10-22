@@ -1,12 +1,8 @@
-import apiClient from '../../services/apiClient'
-import { ENDPOINTS } from '../../services/endpoints'
+import { fetchDeviceData, fetchPoles } from '../../services/forestApi'
 
 export async function fetchDevices() {
-  const { data } = await apiClient.get(ENDPOINTS.devices)
-  return data
+  const items = await fetchPoles()
+  return { items, total: items.length }
 }
 
-export async function fetchDevice(poleId) {
-  const { data } = await apiClient.get(ENDPOINTS.device(poleId))
-  return data
-}
+export const fetchDevice = fetchDeviceData

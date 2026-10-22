@@ -21,11 +21,14 @@ export function useDashboard() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const timer = window.setInterval(load, 30000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
-  // Refresh summary counts whenever a new detection arrives via WS
   useWebSocketEvent('new_detection', () => {
-    fetchDashboardSummary().then(setSummary).catch(() => {})
+    load()
   })
 
   return { summary, health, loading, error, refresh: load }

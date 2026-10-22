@@ -19,9 +19,6 @@ PyYAML==6.0.2
 # ── Annotation utilities ──────────────────────────────────────────────────────
 supervision==0.24.0         # Drawing helpers and tracking utilities
 
-# ── Web UI ────────────────────────────────────────────────────────────────────
-streamlit==1.39.0
-
 # ── FastAPI backend (React dashboard API) ─────────────────────────────────────
 fastapi==0.115.0
 uvicorn[standard]==0.31.0
@@ -29,7 +26,7 @@ python-multipart==0.0.12    # File upload support
 aiofiles==24.1.0            # Async file serving
 
 # ── Storage and logging ───────────────────────────────────────────────────────
-# sqlite3 is part of the Python standard library — no extra package needed
+pymongo==4.10.1              # MongoDB persistence
 python-dotenv==1.0.1        # Load .env configuration files
 
 # ── Testing ───────────────────────────────────────────────────────────────────

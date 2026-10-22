@@ -7,7 +7,7 @@ Features
 --------
 - Upload an image or video and run YOLOv8 detection.
 - Display annotated results with bounding boxes, class names, and confidence.
-- Save detection events to SQLite via EventLogger.
+- Save detection events to MongoDB via EventLogger.
 - Save evidence crops via EvidenceStore.
 - Review recent detection events in a table.
 - High-priority (firearm) alerts are highlighted in red.
@@ -48,6 +48,7 @@ from src.config import Settings
 from src.detector import Detection, Detector, ModelNotFoundError
 from src.event_logger import EventLogger
 from src.evidence_store import EvidenceStore
+from src.live_monitor import LiveMonitor, discover_cameras
 
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -73,8 +74,8 @@ def load_detector(weights: str, conf: float, iou: float) -> Detector | None:
 
 
 @st.cache_resource
-def load_event_logger(db_path: str, evidence_dir: str) -> EventLogger:
-    return EventLogger(db_path=db_path, evidence_dir=evidence_dir)
+def load_event_logger(uri: str, database: str, evidence_dir: str) -> EventLogger:
+    return EventLogger(evidence_dir=evidence_dir, uri=uri, database_name=database)
 
 
 @st.cache_resource
@@ -85,6 +86,11 @@ def load_evidence_store(evidence_dir: str) -> EvidenceStore:
 @st.cache_resource
 def load_alert_engine(threshold: float) -> AlertEngine:
     return AlertEngine(firearm_conf_threshold=threshold)
+
+
+@st.cache_resource
+def load_live_monitor(_cfg: Settings, _detector: Detector, _event_logger: EventLogger, _alert_engine: AlertEngine) -> LiveMonitor:
+    return LiveMonitor(_cfg, _detector, _event_logger, _alert_engine)
 
 
 # ── Drawing helpers ───────────────────────────────────────────────────────────
@@ -190,8 +196,7 @@ def render_sidebar(cfg: Settings) -> tuple[float, float, float]:
     )
     if not cfg.model_weights.exists():
         st.sidebar.warning(
-            "⚠️ Model weights not found.\n\n"
-            "Train in Google Colab and copy `best.pt` to `models/`."
+            f"Model weights not found at `{cfg.model_weights}`."
         )
 
     st.sidebar.markdown("---")
@@ -211,23 +216,111 @@ def main() -> None:
 
     st.title("🌲 Forest Intrusion Detection System")
     st.caption(
-        "YOLOv8n · Classes: animal · person · firearm  |  "
+        "YOLO model predictions for operator review. "
         "All firearm alerts require human review."
     )
+
+    try:
+        event_logger = load_event_logger(cfg.mongodb_uri, cfg.mongodb_database, str(cfg.evidence_dir))
+    except Exception as exc:
+        st.error(f"MongoDB connection error: {exc}. Configure MONGODB_URI in .env and restart the app.")
+        return
 
     conf, iou, firearm_thresh = render_sidebar(cfg)
 
     detector = load_detector(str(cfg.model_weights), conf=conf, iou=iou)
-    event_logger = load_event_logger(
-        str(cfg.database_path), str(cfg.evidence_dir)
-    )
     evidence_store = load_evidence_store(str(cfg.evidence_dir))
     alert_engine   = load_alert_engine(firearm_thresh)
 
-    tab_detect, tab_events = st.tabs(["🔍 Detect", "📋 Recent Events"])
+    st.subheader("Live Camera Feed")
+    if detector is None:
+        st.error(f"Model weights not found: {cfg.model_weights}")
+        return
+    cfg.class_names = {int(k): str(v) for k, v in detector.class_names.items()}
+    st.caption("Checkpoint classes: " + ", ".join(f"{k}: {v}" for k, v in cfg.class_names.items()))
+    monitor = load_live_monitor(cfg, detector, event_logger, alert_engine)
+    cameras = discover_cameras(max_index=max(4, cfg.camera_index + 1), dshow=(sys.platform == "win32"))
+    available = [x["camera_index"] for x in cameras]
+    camera_index = st.selectbox("Camera index", sorted(set(available + [cfg.camera_index])),
+                                index=(sorted(set(available + [cfg.camera_index])).index(cfg.camera_index)))
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Start Monitoring", type="primary", disabled=monitor.status()["running"]):
+        monitor.start(camera_index)
+    if c2.button("Stop Monitoring", disabled=not monitor.status()["running"]):
+        monitor.stop()
+    state = monitor.status()
+    c3.metric("Camera status", "Online" if state["connected"] else ("Connecting" if state["running"] else "Offline"))
+    st.caption(f"Camera ID: {state['camera_id']} · Index: {state['camera_index']} · {state['message']}")
+    if state.get("error"):
+        st.error(f"Live monitor error: {state['error']}")
+
+    @st.fragment(run_every=1)
+    def render_live_frame():
+        live_frame = monitor.latest_frame()
+        if live_frame is not None:
+            st.image(cv2.cvtColor(live_frame, cv2.COLOR_BGR2RGB), caption="Live model predictions", use_container_width=True)
+        else:
+            st.info("Start monitoring to view the selected camera.")
+    render_live_frame()
+
+    st.subheader("Pole Monitoring")
+    poles = event_logger.get_poles()
+    pole = next((p for p in poles if p.get("pole_id") == cfg.pole_id), None)
+    if pole:
+        st.dataframe([{"Pole ID": pole.get("pole_id"), "Pole name": pole.get("pole_name", cfg.pole_name),
+                       "Location": pole.get("location", cfg.pole_location), "Camera ID": pole.get("camera_id"),
+                       "Status": pole.get("status", "unconfigured"), "Last heartbeat": pole.get("last_heartbeat"),
+                       "Latest alert": pole.get("latest_alert_status")}], use_container_width=True)
+    else:
+        st.info(f"Pole {cfg.pole_id} is unconfigured. It will report status after camera heartbeat.")
+
+    events_now = event_logger.get_recent_events(limit=200)
+    total_count = event_logger.count_events()
+    people_count = event_logger.count_events({"class_name": "person"})
+    high_count = event_logger.count_events({"alert_priority": {"$in": ["high", "critical"]}})
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total events", total_count); m2.metric("People detected", people_count)
+    m3.metric("High-priority alerts", high_count); m4.metric("Camera", "Online" if state["connected"] else "Offline")
+
+    st.subheader("Recent Alerts")
+    if events_now:
+        selected_event = st.selectbox("Select an event", events_now, format_func=lambda e: f"{e['event_id']} · {e['server_ts']} · {e['class_name']} {e['confidence']:.2f} · {e['alert_priority']} · {e.get('image_count', 0)} images")
+        st.dataframe([{"Event ID": e["event_id"], "Timestamp": e["server_ts"], "Class": e["class_name"],
+                       "Confidence": e["confidence"], "Priority": e["alert_priority"], "Pole": e["pole_id"],
+                       "Images": e.get("image_count", 0)} for e in events_now[:20]], use_container_width=True)
+        st.subheader("Burst Evidence Gallery")
+        images = event_logger.get_event_images(selected_event["event_id"])
+        if images:
+            cols = st.columns(3)
+            for i, image in enumerate(images):
+                with cols[i % 3]:
+                    if Path(image["local_path"]).is_file():
+                        st.image(str(image["local_path"]), caption=f"Image {image['sequence']} · {image['capture_timestamp']}", use_container_width=True)
+        else:
+            st.info("No burst image records are available for this event.")
+        st.caption(f"First detection: {selected_event.get('first_detection_time')} · Last detection: {selected_event.get('last_detection_time')} · Estimated duration: {selected_event.get('intrusion_duration_seconds') if selected_event.get('intrusion_duration_seconds') is not None else 'Unavailable (no reliable object association)'}")
+    st.subheader("Event History")
+    f1, f2, f3, f4 = st.columns(4)
+    date_range = f1.date_input("Date range", value=())
+    pole_options = ["All"] + [p.get("pole_id", "") for p in poles]
+    pole_filter = f2.selectbox("Pole ID", pole_options)
+    class_filter = f3.selectbox("Detected class", ["All", *sorted({e["class_name"] for e in events_now})])
+    priority_filter = f4.selectbox("Priority", ["All", "normal", "high", "critical"])
+    start_date = date_range[0].isoformat() + "T00:00:00+00:00" if len(date_range) > 0 else None
+    end_date = date_range[-1].isoformat() + "T23:59:59+00:00" if len(date_range) > 1 else None
+    history = event_logger.query_events(start=start_date, end=end_date,
+        pole_id=None if pole_filter == "All" else pole_filter,
+        class_name=None if class_filter == "All" else class_filter,
+        priority=None if priority_filter == "All" else priority_filter, limit=500)
+    st.dataframe([{"Event ID": e["event_id"], "Timestamp": e["server_ts"], "Class": e["class_name"],
+                   "Confidence": e["confidence"], "Priority": e["alert_priority"],
+                   "Pole ID": e["pole_id"], "Images": e.get("image_count", 0)} for e in history],
+                 use_container_width=True)
+
+    file_detection = st.expander("Optional image and video detection", expanded=False)
 
     # ── Detect tab ────────────────────────────────────────────────────────────
-    with tab_detect:
+    with file_detection:
         if detector is None:
             st.error(
                 "Model weights not found at `models/best.pt`.\n\n"
@@ -358,42 +451,6 @@ def main() -> None:
                     _render_detection_table(all_summaries)
                 else:
                     st.info("No detections found in the video.")
-
-    # ── Events tab ────────────────────────────────────────────────────────────
-    with tab_events:
-        st.subheader("Recent Detection Events")
-        events = event_logger.get_recent_events(limit=100)
-        if not events:
-            st.info("No events logged yet. Run detection on an image or video.")
-        else:
-            counts = event_logger.count_by_class()
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total events",  sum(counts.values()))
-            c2.metric("Animals",       counts.get("animal",  0))
-            c3.metric("Persons",       counts.get("person",  0))
-            c4.metric("Firearm alerts", counts.get("firearm", 0))
-
-            display = [
-                {
-                    "Time (UTC)": e["server_ts"][:19],
-                    "Camera":     e["camera_id"],
-                    "Class":      e["class_name"],
-                    "Conf":       f"{e['confidence']:.2f}",
-                    "Priority":   e["alert_priority"],
-                    "Alert":      (e["alert_label"] or "—")[:60],
-                    "Status":     e["review_status"],
-                }
-                for e in events
-            ]
-            st.dataframe(display, use_container_width=True)
-
-            high_priority = [e for e in events if e["alert_priority"] == "high"]
-            if high_priority:
-                st.error(
-                    f"⚠️ {len(high_priority)} high-priority alert(s) pending review. "
-                    "A trained operator must review these events before any action is taken."
-                )
-
 
 def _render_detection_table(summaries: list[dict]) -> None:
     if not summaries:

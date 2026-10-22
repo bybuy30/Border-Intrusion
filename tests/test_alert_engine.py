@@ -66,7 +66,7 @@ class TestAnimalAlerts:
             bbox=(0, 0, 100, 100),
             concurrent_detections=[],
         )
-        assert result.label == ""
+        assert "wildlife" in result.label.lower()
 
     def test_animal_no_associated_ids(self, engine):
         result = engine.evaluate(
@@ -82,14 +82,14 @@ class TestAnimalAlerts:
 
 class TestPersonAlerts:
 
-    def test_person_alone_normal_priority(self, engine):
+    def test_person_alone_intrusion_priority(self, engine):
         result = engine.evaluate(
             class_name="person",
             confidence=0.90,
             bbox=(0, 0, 100, 200),
             concurrent_detections=[],
         )
-        assert result.priority == AlertEngine.PRIORITY_NORMAL
+        assert result.priority == AlertEngine.PRIORITY_HIGH
 
     def test_person_with_animal_still_normal(self, engine):
         result = engine.evaluate(
@@ -98,7 +98,7 @@ class TestPersonAlerts:
             bbox=(0, 0, 100, 200),
             concurrent_detections=[make_detection("animal", 0.75)],
         )
-        assert result.priority == AlertEngine.PRIORITY_NORMAL
+        assert result.priority == AlertEngine.PRIORITY_HIGH
 
 
 # ── Firearm detections ────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ class TestFirearmAlerts:
             bbox=(0, 0, 100, 100),
             concurrent_detections=[],
         )
-        assert result.priority == AlertEngine.PRIORITY_HIGH
+        assert result.priority == AlertEngine.PRIORITY_CRITICAL
 
     def test_firearm_below_threshold_normal_priority(self, engine):
         result = engine.evaluate(
@@ -131,7 +131,7 @@ class TestFirearmAlerts:
             bbox=(0, 0, 100, 100),
             concurrent_detections=[],
         )
-        assert result.priority == AlertEngine.PRIORITY_HIGH
+        assert result.priority == AlertEngine.PRIORITY_CRITICAL
 
     def test_firearm_label_contains_review_required(self, engine):
         result = engine.evaluate(
@@ -179,7 +179,7 @@ class TestPersonFirearmAssociation:
             bbox=(0.0, 0.0, 100.0, 100.0),
             concurrent_detections=[self._overlapping_person()],
         )
-        assert result.priority == AlertEngine.PRIORITY_HIGH
+        assert result.priority == AlertEngine.PRIORITY_CRITICAL
         assert 7 in result.associated_ids
         assert "proximity" in result.label.lower()
 
@@ -190,7 +190,7 @@ class TestPersonFirearmAssociation:
             bbox=(0.0, 0.0, 100.0, 100.0),
             concurrent_detections=[self._non_overlapping_person()],
         )
-        assert result.priority == AlertEngine.PRIORITY_HIGH
+        assert result.priority == AlertEngine.PRIORITY_CRITICAL
         assert result.associated_ids == []
         # Label should be the generic firearm label, not the proximity label
         assert "proximity" not in result.label.lower()
@@ -237,8 +237,8 @@ class TestEvaluateFrame:
         results = engine.evaluate_frame(detections)
         assert len(results) == 3
         assert results[0].priority == AlertEngine.PRIORITY_NORMAL  # animal
-        assert results[1].priority == AlertEngine.PRIORITY_NORMAL  # person
-        assert results[2].priority == AlertEngine.PRIORITY_HIGH    # firearm
+        assert results[1].priority == AlertEngine.PRIORITY_HIGH  # person
+        assert results[2].priority == AlertEngine.PRIORITY_CRITICAL  # firearm
 
     def test_empty_frame(self, engine):
         results = engine.evaluate_frame([])

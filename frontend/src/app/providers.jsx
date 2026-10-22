@@ -15,7 +15,10 @@ export function Providers({ children }) {
   const reconnectTimer               = useRef(null)
   const mountedRef                   = useRef(true)
 
-  const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws'
+  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  const apiUrl = new URL(apiBase)
+  const WS_URL = import.meta.env.VITE_WS_URL ||
+    `${apiUrl.protocol === 'https:' ? 'wss:' : 'ws:'}//${apiUrl.host}/ws`
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -35,7 +38,9 @@ export function Providers({ children }) {
       try {
         const msg = JSON.parse(e.data)
         setLastEvent(msg)
-      } catch { /* ignore malformed frames */ }
+      } catch (error) {
+        console.error('Ignoring malformed WebSocket message', error)
+      }
     }
 
     ws.onclose = () => {

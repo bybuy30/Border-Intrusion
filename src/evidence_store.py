@@ -52,6 +52,30 @@ class EvidenceStore:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def save_burst(self, frames: list, event_id: str) -> list[Path]:
+        """Save exactly six full-frame JPEGs under a unique event directory."""
+        if len(frames) != 6:
+            raise ValueError("A burst must contain exactly six frames.")
+        event_dir = self.evidence_dir / event_id
+        event_dir.mkdir(parents=True, exist_ok=False)
+        paths: list[Path] = []
+        try:
+            for sequence, frame in enumerate(frames, 1):
+                path = event_dir / f"{sequence:02d}.jpg"
+                ok = cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+                if not ok:
+                    raise IOError(f"Could not encode burst image {sequence} for event {event_id}.")
+                paths.append(path.resolve())
+            return paths
+        except Exception:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            try:
+                event_dir.rmdir()
+            except OSError:
+                pass
+            raise
+
     def save_crop(
         self,
         frame: np.ndarray,

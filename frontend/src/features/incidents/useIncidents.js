@@ -22,12 +22,8 @@ export function useIncidents(filters = {}) {
 
   useEffect(() => { load() }, [load])
 
-  // Prepend incoming WS events to the list
-  useWebSocketEvent('new_detection', (msg) => {
-    setData((prev) => ({
-      total: prev.total + 1,
-      items: [msg.data, ...prev.items].slice(0, filters.limit || 50),
-    }))
+  useWebSocketEvent('new_detection', () => {
+    load()
   })
 
   useWebSocketEvent('incident_updated', (msg) => {
